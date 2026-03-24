@@ -15,10 +15,16 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 3001
 
-// Log every request to the backend terminal (method, url, status, response time)
 app.use(morgan('dev', { stream: { write: (msg) => process.stdout.write(msg) } }))
 
-app.use(cors({ origin: true, credentials: true }))
+app.use(cors({
+  origin: '*',
+  credentials: false,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}))
+
+app.options('*', cors())
 app.use(express.json())
 
 app.use('/api', analyzeRouter)
@@ -28,27 +34,42 @@ app.use('/api', feedbackRouter)
 app.use('/api', chatRouter)
 app.use('/api/account', accountRouter)
 
+// ── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (_, res) => {
   const apiKeyConfigured = !!process.env.OPEN_ROUTER_API_KEY?.trim()
   const apiKeyValid = apiKeyConfigured && process.env.OPEN_ROUTER_API_KEY.trim().startsWith('sk-or-v1-')
-  
-  res.json({ 
+  const supabaseConfigured = !!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL)
+
+  res.status(200).json({
     status: 'ok',
-    openrouter: {
-      configured: apiKeyConfigured,
-      valid: apiKeyValid,
-      message: apiKeyConfigured 
-        ? (apiKeyValid ? 'API key is configured' : 'API key format appears invalid')
-        : 'OPEN_ROUTER_API_KEY not set in .env file'
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
+    environment: process.env.NODE_ENV || 'development',
+    services: {
+      openrouter: {
+        configured: apiKeyConfigured,
+        valid: apiKeyValid,
+        message: !apiKeyConfigured
+          ? 'OPEN_ROUTER_API_KEY not set'
+          : apiKeyValid ? 'API key is configured' : 'API key format appears invalid'
+      },
+      supabase: {
+        configured: supabaseConfigured,
+        message: supabaseConfigured ? 'Supabase URL is configured' : 'SUPABASE_URL not set'
+      }
     }
   })
+})
+
+// ── Ping (lightweight liveness check) ────────────────────────────────────────
+app.get('/api/ping', (_, res) => {
+  res.status(200).json({ status: 'ok', message: 'pong' })
 })
 
 app.listen(PORT, () => {
   logger.info(`CropCare API running at http://localhost:${PORT}`)
   logger.info(`Log level: ${process.env.LOG_LEVEL || 'info'} (set LOG_LEVEL=debug for more output)`)
 
-  // Check API key configuration on startup
   const apiKey = process.env.OPEN_ROUTER_API_KEY?.trim()
   if (!apiKey) {
     logger.warn('OPEN_ROUTER_API_KEY is not set in .env file')
