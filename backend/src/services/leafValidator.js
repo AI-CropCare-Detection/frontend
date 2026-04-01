@@ -1,116 +1,81 @@
 /**
- * Leaf Validator Service
- * Uses color-based analysis to validate that an uploaded image contains a plant/crop leaf
- * No external API required - works fully offline
+ * Leaf Validator - ONLY accepts crop leaves, rejects everything else
  */
 
-import { logger } from '../utils/logger.js'
-
-/**
- * Analyze image colors to detect green/plant content
- */
-async function analyzeImageColors(imageBuffer) {
-  const bytes = new Uint8Array(imageBuffer)
-
-  let greenPixels = 0
-  let totalSampled = 0
-  const sampleRate = 10
-
-  for (let i = 100; i < bytes.length - 3; i += sampleRate * 3) {
-    const r = bytes[i]
-    const g = bytes[i + 1]
-    const b = bytes[i + 2]
-
-    if (r === undefined || g === undefined || b === undefined) continue
-
-    totalSampled++
-
-    const isGreenDominant = g > r * 0.8 && g > b * 0.8 && g > 30
-    const isYellowGreen = g > 100 && r > 80 && b < 100
-    const isDarkGreen = g > 40 && g > r && g > b
-
-    if (isGreenDominant || isYellowGreen || isDarkGreen) {
-      greenPixels++
-    }
-  }
-
-  if (totalSampled === 0) {
-    return { isValid: false, message: '❌ Invalid image. Please take a photo of a leaf of a crop.', confidence: 0 }
-  }
-
-  const greenRatio = greenPixels / totalSampled
-  const confidence = Math.min(95, Math.round(greenRatio * 200))
-
-  console.log(`=== COLOR ANALYSIS ===`)
-  console.log(`Green pixels: ${greenPixels} / ${totalSampled}`)
-  console.log(`Green ratio: ${(greenRatio * 100).toFixed(1)}%`)
-  console.log(`======================`)
-
-  if (greenRatio >= 0.08) {
-    return {
-      isValid: true,
-      message: '✅ Image validated. Proceeding with disease analysis.',
-      confidence,
-    }
-  }
-
-  return {
-    isValid: false,
-    message: '❌ Invalid image. Please take a photo of a leaf of a crop.',
-    confidence,
-  }
-}
-
-/**
- * Validate if an image contains a plant/crop leaf
- * @param {Buffer} imageBuffer - Image file buffer
- * @param {string} mimeType - Image MIME type
- * @returns {Promise<{isValid: boolean, message: string, confidence: number}>}
- */
 export async function validateLeafImage(imageBuffer, mimeType = 'image/jpeg') {
   try {
-    if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
+    console.log('\n🔍 LEAF VALIDATION STARTED');
+    console.log(`File size: ${(imageBuffer.length / 1024).toFixed(1)} KB`);
+    
+    // Reject images that are too small
+    if (!imageBuffer || imageBuffer.length < 5000) {
+      console.log('❌ REJECTED: Image too small');
       return {
         isValid: false,
-        message: '❌ Invalid image. Please take a photo of a leaf of a crop.',
-        confidence: 0,
+        message: '❌ Image too small. Please upload a clear photo of a crop leaf.',
+        confidence: 0
+      };
+    }
+    
+    // Analyze pixels for green color (characteristic of crop leaves)
+    const bytes = new Uint8Array(imageBuffer);
+    let greenPixels = 0;
+    let totalPixels = 0;
+    
+    // Sample pixels throughout the image
+    for (let i = 0; i < bytes.length - 3; i += 45) {
+      const r = bytes[i];
+      const g = bytes[i + 1];
+      const b = bytes[i + 2];
+      
+      if (r === undefined || g === undefined || b === undefined) continue;
+      
+      totalPixels++;
+      
+      // GREEN DETECTION - What makes a crop leaf
+      // Healthy green leaf
+      const isHealthyGreen = (g > r + 25 && g > b + 25 && g > 65);
+      // Yellowish green leaf (diseased but still leaf)
+      const isYellowGreen = (g > 80 && r > 60 && r < 150 && b < 90);
+      // Dark green leaf
+      const isDarkGreen = (g > 45 && g > r + 15 && g > b + 15);
+      
+      if (isHealthyGreen || isYellowGreen || isDarkGreen) {
+        greenPixels++;
       }
     }
-
-    if (imageBuffer.length === 0) {
+    
+    const greenPercentage = totalPixels > 0 ? (greenPixels / totalPixels) * 100 : 0;
+    
+    console.log(`Green pixels: ${greenPixels} / ${totalPixels} = ${greenPercentage.toFixed(1)}%`);
+    
+    // ONLY ACCEPT if there is significant green (crop leaf)
+    // Reject if green percentage is low (car, animal, person, building, etc.)
+    if (greenPercentage >= 5) {
+      console.log('✅ ACCEPTED: Valid crop leaf detected');
+      return {
+        isValid: true,
+        message: '✅ Crop leaf detected! Proceeding with disease analysis.',
+        confidence: Math.min(95, Math.round(greenPercentage * 2))
+      };
+    } 
+    else {
+      console.log('❌ REJECTED: Not a crop leaf');
       return {
         isValid: false,
-        message: '❌ Invalid image. Please take a photo of a leaf of a crop.',
-        confidence: 0,
-      }
+        message: '❌ This is not a crop leaf. Please upload a clear photo of a crop leaf with visible green areas.',
+        confidence: Math.round(greenPercentage * 2)
+      };
     }
-
-    logger.debug(`Validating leaf image (size: ${imageBuffer.length} bytes)`)
-
-    const result = await analyzeImageColors(imageBuffer)
-
-    logger.info(`Leaf validation result: isValid=${result.isValid}, confidence=${result.confidence}%`)
-
-    return result
-
-  } catch (err) {
-    logger.error(`Leaf validation error: ${err.message || err}`)
+    
+  } catch (error) {
+    console.error('Validation error:', error);
     return {
       isValid: false,
-      message: '❌ Invalid image. Please take a photo of a leaf of a crop.',
-      confidence: 0,
-    }
+      message: '❌ Error processing image. Please try again.',
+      confidence: 0
+    };
   }
 }
 
-/**
- * Check if validation failure is due to a service error
- */
-export function isValidationError(validationResult) {
-  return (
-    !validationResult.isValid &&
-    validationResult.confidence === 0
-  )
-}
-
-export default { validateLeafImage, isValidationError }
+export default { validateLeafImage };

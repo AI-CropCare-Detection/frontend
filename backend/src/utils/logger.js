@@ -14,7 +14,21 @@ function shouldLog(level) {
 function formatMessage(level, ...args) {
   const timestamp = new Date().toISOString()
   const prefix = `[${timestamp}] [${level.toUpperCase()}]`
-  return [prefix, ...args]
+  // Handle objects and errors properly
+  const formattedArgs = args.map(arg => {
+    if (arg instanceof Error) {
+      return arg.stack || arg.message
+    }
+    if (typeof arg === 'object') {
+      try {
+        return JSON.stringify(arg, null, 2)
+      } catch (e) {
+        return String(arg)
+      }
+    }
+    return arg
+  })
+  return [prefix, ...formattedArgs]
 }
 
 export const logger = {
@@ -39,3 +53,5 @@ export const logger = {
     }
   },
 }
+
+export default logger

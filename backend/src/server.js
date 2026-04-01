@@ -6,15 +6,6 @@ import morgan from 'morgan'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-import { analyzeRouter } from './routes/analyze.js'
-import { recommendationsRouter } from './routes/recommendations.js'
-import { insightsRouter } from './routes/insights.js'
-import { accountRouter } from './routes/account.js'
-import { feedbackRouter } from './routes/feedback.js'
-import { chatRouter } from './routes/chat.js'
-import { validateRouter } from './routes/validate.js'  // ✅ new
-import { logger } from './utils/logger.js'
-
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -23,19 +14,39 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 3001
 
+// Simple logger that works in Railway
+const logger = {
+  info: (...args) => console.log('[INFO]', ...args),
+  error: (...args) => console.error('[ERROR]', ...args)
+}
+
 app.use(compression())
 app.use(morgan('dev'))
 app.use(cors({ origin: true, credentials: true }))
 app.use(express.json())
 
-// Routes
-app.use('/api', validateRouter)        // ✅ new
-app.use('/api', analyzeRouter)
-app.use('/api', recommendationsRouter)
-app.use('/api', insightsRouter)
-app.use('/api', feedbackRouter)
-app.use('/api', chatRouter)
-app.use('/api/account', accountRouter)
+// Try to import routes with error handling
+try {
+  const { analyzeRouter } = await import('./routes/analyze.js')
+  const { recommendationsRouter } = await import('./routes/recommendations.js')
+  const { insightsRouter } = await import('./routes/insights.js')
+  const { accountRouter } = await import('./routes/account.js')
+  const { feedbackRouter } = await import('./routes/feedback.js')
+  const { chatRouter } = await import('./routes/chat.js')
+  const { validateRouter } = await import('./routes/validate.js')
+  
+  app.use('/api', validateRouter)
+  app.use('/api', analyzeRouter)
+  app.use('/api', recommendationsRouter)
+  app.use('/api', insightsRouter)
+  app.use('/api', feedbackRouter)
+  app.use('/api', chatRouter)
+  app.use('/api/account', accountRouter)
+  
+  logger.info('✅ All routes loaded successfully')
+} catch (error) {
+  logger.error('❌ Error loading routes:', error.message)
+}
 
 // Serve frontend
 const frontendDistPath = path.resolve(__dirname, '../../frontend/dist')
@@ -52,17 +63,18 @@ app.get('*', (req, res) => {
 
 // Health check
 app.get('/api/health', (_, res) => {
-  const apiKeyConfigured = !!process.env.OPEN_ROUTER_API_KEY?.trim()
-  const apiKeyValid = apiKeyConfigured && process.env.OPEN_ROUTER_API_KEY.trim().startsWith('sk-or-v1-')
   res.json({
     status: 'ok',
-    openrouter: {
-      configured: apiKeyConfigured,
-      valid: apiKeyValid
-    }
+    timestamp: new Date().toISOString()
   })
 })
 
+// Error handling middleware
+app.use((err, req, res, next) => {
+  logger.error('Unhandled error:', err)
+  res.status(500).json({ error: 'Internal server error' })
+})
+
 app.listen(PORT, () => {
-  logger.info(`CropCare API running at http://localhost:${PORT}`)
+  logger.info(`CropCare API running on port ${PORT}`)
 })
