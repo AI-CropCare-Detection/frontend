@@ -4,6 +4,7 @@ dotenv.config()
 import express from 'express'
 import cors from 'cors'
 import morgan from 'morgan'
+import dotenv from 'dotenv'
 import { analyzeRouter } from './routes/analyze.js'
 import { recommendationsRouter } from './routes/recommendations.js'
 import { insightsRouter } from './routes/insights.js'
@@ -12,9 +13,12 @@ import { feedbackRouter } from './routes/feedback.js'
 import { chatRouter } from './routes/chat.js'
 import { logger } from './utils/logger.js'
 
+dotenv.config()
+
 const app = express()
 const PORT = process.env.PORT || 3001
 
+app.use(compression())
 app.use(morgan('dev', { stream: { write: (msg) => process.stdout.write(msg) } }))
 app.use(cors({ origin: true, credentials: true }))
 app.use(express.json())
@@ -25,6 +29,20 @@ app.use('/api', insightsRouter)
 app.use('/api', feedbackRouter)
 app.use('/api', chatRouter)
 app.use('/api/account', accountRouter)
+
+// ── Serve Frontend (built React app) ──────────────────────────────────────────
+const frontendDistPath = path.resolve(__dirname, '../../frontend/dist')
+app.use(express.static(frontendDistPath))
+
+// ── SPA Fallback: Serve index.html for all unmatched routes ───────────────────
+app.get('*', (req, res) => {
+  // Don't fallback for API routes
+  if (!req.path.startsWith('/api')) {
+    res.sendFile(path.join(frontendDistPath, 'index.html'))
+  } else {
+    res.status(404).json({ message: 'API endpoint not found' })
+  }
+})
 
 app.get('/api/health', (_, res) => {
   const apiKeyConfigured = !!process.env.OPEN_ROUTER_API_KEY?.trim()
