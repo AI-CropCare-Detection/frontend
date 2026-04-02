@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import { Camera, Target, TrendingUp, Clock, Leaf, AlertCircle } from 'lucide-react'
 import { useTranslation } from '../contexts/AppSettingsContext'
 
@@ -14,57 +14,112 @@ export default function PrimaryAnalysisFrame({
   hasImage,
 }) {
   const inputRef = fileInputRef || useRef(null)
+  const cameraInputRef = useRef(null)
   const t = useTranslation()
   
   const [isValidating, setIsValidating] = useState(false)
   const [validationError, setValidationError] = useState(null)
   const [validationPassed, setValidationPassed] = useState(false)
+  const [scanning, setScanning] = useState(false)
 
-  // Function to check if image contains green pixels (crop leaf)
-  const checkIfCropLeaf = (imageElement) => {
+  // Reset state when new image is uploaded
+  useEffect(() => {
+    if (imagePreview) {
+      setValidationError(null)
+      setValidationPassed(false)
+      setIsValidating(false)
+      setScanning(false)
+    }
+  }, [imagePreview])
+
+  // Fast green detection for mobile
+  const checkIfCropLeafFast = (file) => {
     return new Promise((resolve) => {
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
+      const reader = new FileReader()
       
-      canvas.width = imageElement.width
-      canvas.height = imageElement.height
-      ctx.drawImage(imageElement, 0, 0, canvas.width, canvas.height)
-      
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      const data = imageData.data
-      
-      let greenPixels = 0
-      let totalPixels = 0
-      
-      // Sample pixels every 20px for performance
-      for (let y = 0; y < canvas.height; y += 20) {
-        for (let x = 0; x < canvas.width; x += 20) {
-          const index = (y * canvas.width + x) * 4
-          const r = data[index]
-          const g = data[index + 1]
-          const b = data[index + 2]
-          
-          if (r !== undefined && g !== undefined && b !== undefined) {
-            totalPixels++
+      reader.onload = function(e) {
+        const img = new Image()
+        const timeout = setTimeout(() => {
+          console.log('Fast detection timeout, assuming leaf')
+          resolve(true)
+        }, 2000)
+        
+        img.onload = function() {
+          clearTimeout(timeout)
+          try {
+            const canvas = document.createElement('canvas')
+            const ctx = canvas.getContext('2d')
             
-            // Check if pixel is green (characteristic of crop leaves)
-            const isGreen = (g > r + 25 && g > b + 25 && g > 65) ||
-                           (g > 80 && r > 60 && r < 150 && b < 90) ||
-                           (g > 45 && g > r + 15 && g > b + 15)
+            const size = 100
+            canvas.width = size
+            canvas.height = size
+            ctx.drawImage(img, 0, 0, size, size)
             
-            if (isGreen) {
-              greenPixels++
+            const imageData = ctx.getImageData(0, 0, size, size)
+            const data = imageData.data
+            
+            let greenCount = 0
+            const step = 2
+            
+            for (let i = 0; i < data.length; i += step * 4) {
+              const r = data[i]
+              const g = data[i + 1]
+              const b = data[i + 2]
+              
+              if (g > r && g > b && g > 30) {
+                greenCount++
+              }
             }
+            
+            const total = Math.floor(data.length / (step * 4))
+            const percentage = (greenCount / total) * 100
+            
+            console.log(`Mobile validation: ${percentage.toFixed(1)}% green`)
+            resolve(percentage > 0.5)
+            
+          } catch (error) {
+            console.error('Detection error:', error)
+            resolve(true)
           }
         }
+        img.src = e.target.result
       }
       
-      const greenPercentage = totalPixels > 0 ? (greenPixels / totalPixels) * 100 : 0
-      console.log(`Green pixels: ${greenPixels}/${totalPixels} (${greenPercentage.toFixed(1)}%)`)
-      
-      // Accept if at least 5% of pixels are green
-      resolve(greenPercentage >= 5)
+      reader.onerror = () => resolve(true)
+      reader.readAsDataURL(file)
     })
+  }
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      const previewUrl = URL.createObjectURL(file)
+      const syntheticEvent = { target: { files: [file], value: previewUrl } }
+      onFileChange(syntheticEvent)
+      setValidationError(null)
+      setValidationPassed(false)
+      setIsValidating(false)
+      setScanning(false)
+    }
+  }
+
+  const handleCameraCapture = () => {
+    if (cameraInputRef.current) {
+      cameraInputRef.current.click()
+    }
+  }
+
+  const handleCameraChange = (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      const previewUrl = URL.createObjectURL(file)
+      const syntheticEvent = { target: { files: [file], value: previewUrl } }
+      onFileChange(syntheticEvent)
+      setValidationError(null)
+      setValidationPassed(false)
+      setIsValidating(false)
+      setScanning(false)
+    }
   }
 
   const handleAnalyze = async () => {
@@ -73,68 +128,78 @@ export default function PrimaryAnalysisFrame({
       return
     }
 
+    // Start scanning animation
+    setScanning(true)
     setIsValidating(true)
     setValidationError(null)
-    setValidationPassed(false)
 
     try {
-      // Create an image element to analyze
-      const img = new Image()
+      // Get the actual file
+      let file = null
       
-      // Handle different image preview formats
-      let imageUrl = imagePreview
-      if (imagePreview instanceof File || imagePreview instanceof Blob) {
-        imageUrl = URL.createObjectURL(imagePreview)
+      if (inputRef.current && inputRef.current.files && inputRef.current.files[0]) {
+        file = inputRef.current.files[0]
+      } else if (cameraInputRef.current && cameraInputRef.current.files && cameraInputRef.current.files[0]) {
+        file = cameraInputRef.current.files[0]
       }
       
-      img.src = imageUrl
-      
-      await new Promise((resolve, reject) => {
-        img.onload = resolve
-        img.onerror = reject
-      })
-      
-      // Check if it's a crop leaf
-      const isCropLeaf = await checkIfCropLeaf(img)
-      
-      // Clean up blob URL if created
-      if (imageUrl !== imagePreview && imageUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(imageUrl)
+      if (!file) {
+        console.log('No file found, proceeding directly to analysis')
+        setValidationPassed(true)
+        setIsValidating(false)
+        // Call parent's analyze function directly
+        if (onAnalyze) {
+          onAnalyze()
+        }
+        return
       }
+      
+      // Validate if it's a crop leaf
+      const isCropLeaf = await checkIfCropLeafFast(file)
       
       if (!isCropLeaf) {
         setValidationError('❌ This is not a crop leaf. Please upload a clear photo of a plant leaf with visible green areas.')
-        // Clear the invalid image
-        if (inputRef.current) {
-          inputRef.current.value = ''
-        }
-        if (onFileChange) {
-          onFileChange({ target: { value: '' } })
-        }
+        setScanning(false)
         setIsValidating(false)
         return
       }
       
-      // If it's a crop leaf, proceed to backend analysis
+      // Validation passed
       setValidationPassed(true)
-      console.log('✅ Crop leaf detected! Sending to backend for analysis...')
-      onAnalyze()
+      setIsValidating(false)
+      
+      // Small delay to show success message, then call analysis
+      setTimeout(() => {
+        setScanning(false)
+        if (onAnalyze) {
+          console.log('Calling parent onAnalyze function...')
+          onAnalyze()
+        }
+      }, 800)
       
     } catch (error) {
       console.error('Validation error:', error)
-      setValidationError('Could not process image. Please try again.')
-    } finally {
+      setScanning(false)
       setIsValidating(false)
+      // On error, still try to analyze
+      if (onAnalyze) {
+        onAnalyze()
+      }
     }
   }
 
   const handleFileChange = (e) => {
     setValidationError(null)
     setValidationPassed(false)
+    setIsValidating(false)
+    setScanning(false)
     if (onFileChange) {
       onFileChange(e)
     }
   }
+
+  // Show analyze button when there's an image that hasn't been analyzed or rejected
+  const showAnalyzeButton = hasImage && !validationError && !validationPassed && !isValidating && !loading
 
   return (
     <section className="glass-modal dark:glass-modal-dark rounded-2xl p-6">
@@ -144,37 +209,60 @@ export default function PrimaryAnalysisFrame({
             <Camera className="text-emerald-600 dark:text-emerald-400" size={20} />
             {t('loadPlantImage')}
           </h3>
+          
           <input
             ref={inputRef}
             type="file"
             accept="image/*"
-            capture="environment"
-            onChange={handleFileChange}
+            onChange={handleFileUpload}
             className="sr-only"
           />
+          
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handleCameraChange}
+            className="sr-only"
+          />
+          
           <div className="flex flex-wrap gap-3 items-center">
             <button
               type="button"
-              onClick={onLoadOrTake}
+              onClick={() => inputRef.current?.click()}
               className="inline-flex flex-col items-center justify-center gap-1 w-28 h-28 rounded-xl glass-input dark:glass-input-dark border-2 border-dashed border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-emerald-500 hover:text-emerald-700 transition-all"
             >
               <Camera className="text-3xl" />
               <span className="text-sm font-medium">{t('Upload Image')}</span>
             </button>
-            {onCapture && (
-              <button
-                type="button"
-                onClick={onCapture}
-                className="inline-flex flex-col items-center justify-center gap-1 w-28 h-28 rounded-xl glass-input dark:glass-input-dark border-2 border-dashed border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-emerald-500 hover:text-emerald-700 transition-all"
-              >
-                <Camera className="text-3xl" />
-                <span className="text-sm font-medium">Take Photo</span>
-              </button>
-            )}
+            
+            <button
+              type="button"
+              onClick={handleCameraCapture}
+              className="inline-flex flex-col items-center justify-center gap-1 w-28 h-28 rounded-xl glass-input dark:glass-input-dark border-2 border-dashed border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-emerald-500 hover:text-emerald-700 transition-all"
+            >
+              <Camera className="text-3xl" />
+              <span className="text-sm font-medium">Take Photo</span>
+            </button>
+            
             {imagePreview && (
               <div className="relative overflow-hidden rounded-xl border border-slate-200 dark:border-slate-600">
                 <img src={imagePreview} alt="Preview" className="w-28 h-28 object-cover" />
-                {(loading || isValidating) && (
+                
+                {/* Scanning Animation Overlay */}
+                {scanning && (
+                  <div className="absolute inset-0 pointer-events-none">
+                    <div
+                      className="absolute inset-0 bg-gradient-to-b from-transparent via-emerald-500/40 to-transparent"
+                      style={{
+                        animation: 'scanMove 1.5s ease-in-out infinite',
+                      }}
+                    />
+                  </div>
+                )}
+                
+                {(loading || isValidating) && !scanning && (
                   <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                     <div className="animate-spin rounded-full h-6 w-6 border-2 border-white border-t-transparent"></div>
                   </div>
@@ -190,14 +278,21 @@ export default function PrimaryAnalysisFrame({
             </div>
           )}
           
-          {validationPassed && (
+          {validationPassed && !loading && (
             <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded-lg flex items-start gap-2 text-sm border border-green-200 dark:border-green-800">
               <Leaf className="shrink-0 mt-0.5" size={16} />
               <span>✅ Crop leaf detected! Analyzing for diseases...</span>
             </div>
           )}
 
-          {hasImage && !validationError && !validationPassed && (
+          {loading && (
+            <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-lg flex items-start gap-2 text-sm border border-blue-200 dark:border-blue-800">
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent shrink-0 mt-0.5"></div>
+              <span>Analyzing crop disease with AI model...</span>
+            </div>
+          )}
+
+          {showAnalyzeButton && (
             <div className="mt-3 flex gap-2">
               <button
                 type="button"
@@ -209,11 +304,6 @@ export default function PrimaryAnalysisFrame({
                   <>
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
                     Validating Leaf...
-                  </>
-                ) : loading ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-                    {t('analyzing')}
                   </>
                 ) : (
                     'Analyze Leaf'
@@ -262,6 +352,18 @@ export default function PrimaryAnalysisFrame({
           </div>
         </div>
       </div>
+      
+      {/* Add the scanning animation CSS */}
+      <style>{`
+        @keyframes scanMove {
+          0% {
+            transform: translateY(-100%);
+          }
+          100% {
+            transform: translateY(100%);
+          }
+        }
+      `}</style>
     </section>
   )
 }
